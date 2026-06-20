@@ -13,8 +13,7 @@ st.set_page_config(
 st.title("🌍 Quality of Life Intelligence Platform")
 
 st.markdown("""
-Compare countries using World Happiness Report indicators and
-analyze Quality of Life factors.
+Compare countries using World Happiness Report indicators and analyze Quality of Life factors.
 """)
 
 # -----------------------------
@@ -22,85 +21,81 @@ analyze Quality of Life factors.
 # -----------------------------
 @st.cache_data
 def load_data():
-    return pd.read_csv("data/world_happiness.csv")
+    df = pd.read_csv("data/world_happiness.csv")
+    return df
 
 df = load_data()
 
 # -----------------------------
-# DATA CLEANING
+# CLEANING (PANDAS ONLY)
 # -----------------------------
-# Remove junk columns
-df = df.select([
-    col for col in df.columns
-    if col and not col.startswith("_duplicated")
-])
-
-df = df.drop_nulls()
+df = df[[col for col in df.columns if not str(col).startswith("_duplicated")]]
+df = df.dropna()
 
 # -----------------------------
-# RENAME COLUMNS (FIXED)
+# SAFE COLUMN CHECK (avoids crashes)
 # -----------------------------
-df = df.rename({
-    "Country name": "Country",
-    "Life evaluation (3-year average)": "Happiness Score",
-    "Explained by: Log GDP per capita": "GDP",
-    "Explained by: Social support": "Social Support",
-    "Explained by: Healthy life expectancy": "Health",
-    "Explained by: Freedom to make life choices": "Freedom",
-    "Explained by: Generosity": "Generosity",
-    "Explained by: Perceptions of corruption": "Corruption"
-})
+required_columns = [
+    "Country name",
+    "Log GDP per capita",
+    "Social support",
+    "Healthy life expectancy",
+    "Freedom to make life choices",
+    "Generosity",
+    "Perceptions of corruption",
+    "Life Ladder"
+]
+
+for col in required_columns:
+    if col not in df.columns:
+        st.error(f"Missing column in dataset: {col}")
+        st.stop()
 
 # -----------------------------
-# QoL SCORE
+# CREATE STANDARDIZED COLUMNS
 # -----------------------------
-df = df.with_columns(
-    (
-        pl.col("Happiness Score") * 0.30 +
-        pl.col("GDP") * 0.20 +
-        pl.col("Health") * 0.15 +
-        pl.col("Freedom") * 0.15 +
-        pl.col("Social Support") * 0.10 +
-        pl.col("Generosity") * 0.05 +
-        pl.col("Corruption") * 0.05
-    ).alias("QoL Score")
+df["Country"] = df["Country name"]
+df["GDP"] = df["Log GDP per capita"]
+df["Social Support"] = df["Social support"]
+df["Health"] = df["Healthy life expectancy"]
+df["Freedom"] = df["Freedom to make life choices"]
+df["Generosity"] = df["Generosity"]
+df["Corruption"] = df["Perceptions of corruption"]
+df["Happiness Score"] = df["Life Ladder"]
+
+# -----------------------------
+# QoL SCORE (PANDAS VERSION)
+# -----------------------------
+df["QoL Score"] = (
+    df["Happiness Score"] * 0.30 +
+    df["GDP"] * 0.20 +
+    df["Health"] * 0.15 +
+    df["Freedom"] * 0.15 +
+    df["Social Support"] * 0.10 +
+    df["Generosity"] * 0.05 +
+    df["Corruption"] * 0.05
 )
 
-# Convert to Pandas for Plotly
-pdf = df.to_pandas()
-
 # -----------------------------
-# SIDEBAR
+# SIDEBAR NAVIGATION
 # -----------------------------
 page = st.sidebar.selectbox(
     "Navigation",
-    [
-        "Overview",
-        "Country Comparison",
-        "Top Rankings",
-        "Analytics"
-    ]
+    ["Overview", "Country Comparison", "Top Rankings", "Analytics"]
 )
 
 # -----------------------------
-# OVERVIEW PAGE
+# OVERVIEW
 # -----------------------------
 if page == "Overview":
 
     st.header("Project Overview")
 
-    total_countries = len(pdf)
-    avg_qol = round(pdf["QoL Score"].mean(), 2)
+    total_countries = df["Country"].nunique()
+    avg_qol = round(df["QoL Score"].mean(), 2)
 
-    highest_country = pdf.sort_values(
-        "QoL Score",
-        ascending=False
-    ).iloc[0]["Country"]
-
-    lowest_country = pdf.sort_values(
-        "QoL Score",
-        ascending=True
-    ).iloc[0]["Country"]
+    highest_country = df.sort_values("QoL Score", ascending=False).iloc[0]["Country"]
+    lowest_country = df.sort_values("QoL Score", ascending=True).iloc[0]["Country"]
 
     col1, col2, col3, col4 = st.columns(4)
 
@@ -110,7 +105,7 @@ if page == "Overview":
     col4.metric("Lowest Country", lowest_country)
 
     st.subheader("Dataset Preview")
-    st.dataframe(pdf)
+    st.dataframe(df)
 
 # -----------------------------
 # COUNTRY COMPARISON
@@ -119,14 +114,12 @@ elif page == "Country Comparison":
 
     st.header("Country Comparison")
 
-    countries = sorted(pdf["Country"].unique())
+    countries = sorted(df["Country"].unique())
 
     country1 = st.selectbox("Select Country 1", countries)
     country2 = st.selectbox("Select Country 2", countries, index=1)
 
-    compare_df = pdf[
-        pdf["Country"].isin([country1, country2])
-    ]
+    compare_df = df[df["Country"].isin([country1, country2])]
 
     st.dataframe(compare_df)
 
@@ -138,7 +131,7 @@ elif page == "Country Comparison":
 
     radar_data = compare_df.set_index("Country")[comparison_columns]
 
-    st.subheader("Comparison Metrics")
+    st.subheader("Comparison Table")
     st.dataframe(radar_data)
 
 # -----------------------------
@@ -148,10 +141,7 @@ elif page == "Top Rankings":
 
     st.header("Top Rankings")
 
-    top10 = pdf.sort_values(
-        "QoL Score",
-        ascending=False
-    ).head(10)
+    top10 = df.sort_values("QoL Score", ascending=False).head(10)
 
     st.subheader("Top 10 Countries")
     st.dataframe(top10)
@@ -175,43 +165,37 @@ elif page == "Analytics":
     st.subheader("GDP vs Happiness Score")
 
     fig1 = px.scatter(
-        pdf,
+        df,
         x="GDP",
         y="Happiness Score",
         hover_name="Country"
     )
-
     st.plotly_chart(fig1, use_container_width=True)
 
-    st.subheader("Freedom vs Happiness Score")  # fixed typo
+    st.subheader("Freedom vs Happiness Score")
 
     fig2 = px.scatter(
-        pdf,
+        df,
         x="Freedom",
         y="Happiness Score",
         hover_name="Country"
     )
-
     st.plotly_chart(fig2, use_container_width=True)
 
     st.subheader("Top 15 Countries")
 
-    top15 = pdf.sort_values(
-        "QoL Score",
-        ascending=False
-    ).head(15)
+    top15 = df.sort_values("QoL Score", ascending=False).head(15)
 
     fig3 = px.bar(
         top15,
         x="Country",
         y="QoL Score"
     )
-
     st.plotly_chart(fig3, use_container_width=True)
 
     st.subheader("Correlation Matrix")
 
-    numeric_df = pdf.select_dtypes(include="number")
+    numeric_df = df.select_dtypes(include="number")
     corr = numeric_df.corr()
 
     fig4 = px.imshow(
