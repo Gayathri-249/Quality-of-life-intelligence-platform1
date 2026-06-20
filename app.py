@@ -1,7 +1,7 @@
 import streamlit as st
-import polars as pl
 import pandas as pd
 import plotly.express as px
+import os
 
 # -----------------------------
 # PAGE CONFIG
@@ -18,74 +18,68 @@ Compare countries using World Happiness Report indicators and analyze Quality of
 """)
 
 # -----------------------------
-# LOAD DATA (SAFE)
+# LOAD DATA
 # -----------------------------
 @st.cache_data
 def load_data():
-    try:
-        return pl.read_csv("data/world_happiness.csv")
-    except Exception as e:
-        st.error(f"Data loading failed: {e}")
-        return pl.DataFrame()
+    file_path = "data/world_happiness.csv"
+    if not os.path.exists(file_path):
+        return None
+    return pd.read_csv(file_path)
 
 df = load_data()
 
-if df.is_empty():
+if df is None:
+    st.error("❌ Dataset not found in data/world_happiness.csv")
     st.stop()
 
-# -----------------------------
-# CLEANING
-# -----------------------------
-df = df.select([c for c in df.columns if c and not c.startswith("_duplicated")])
-df = df.drop_nulls()
+df = df.dropna()
 
 # -----------------------------
-# SAFE COLUMN RENAME (ONLY IF EXISTS)
+# COLUMN RENAME (SAFE)
 # -----------------------------
 rename_map = {
     "Country name": "Country",
-    "Life evaluation (3-year average)": "Happiness Score",
+    "Life Ladder": "Happiness Score",
     "Explained by: Log GDP per capita": "GDP",
     "Explained by: Social support": "Social Support",
     "Explained by: Healthy life expectancy": "Health",
-    "Explained by: Freedom to make life choices": "Freedom",
-    "Explained by: Generosity": "Generosity",
-    "Explained by: Perceptions of corruption": "Corruption"
+    "Freedom to make life choices": "Freedom",
+    "Generosity": "Generosity",
+    "Perceptions of corruption": "Corruption"
 }
 
-existing_renames = {k: v for k, v in rename_map.items() if k in df.columns}
-df = df.rename(existing_renames)
+df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
 
-required_cols = [
-    "Country", "Happiness Score", "GDP", "Social Support",
-    "Health", "Freedom", "Generosity", "Corruption"
-]
-
-missing = [c for c in required_cols if c not in df.columns]
-
-if missing:
-    st.error(f"Missing required columns: {missing}")
+# -----------------------------
+# REQUIRED CHECK
+# -----------------------------
+if "Country" not in df.columns or "Happiness Score" not in df.columns:
+    st.error("Missing required columns in dataset")
     st.stop()
+
+# Fill missing optional columns
+for col in ["GDP", "Social Support", "Health", "Freedom", "Generosity", "Corruption"]:
+    if col not in df.columns:
+        df[col] = 0
 
 # -----------------------------
 # QoL SCORE
 # -----------------------------
-df = df.with_columns(
-    (
-        pl.col("Happiness Score") * 0.30 +
-        pl.col("GDP") * 0.20 +
-        pl.col("Health") * 0.15 +
-        pl.col("Freedom") * 0.15 +
-        pl.col("Social Support") * 0.10 +
-        pl.col("Generosity") * 0.05 +
-        pl.col("Corruption") * 0.05
-    ).alias("QoL Score")
+df["QoL Score"] = (
+    df["Happiness Score"] * 0.30 +
+    df["GDP"] * 0.20 +
+    df["Health"] * 0.15 +
+    df["Freedom"] * 0.15 +
+    df["Social Support"] * 0.10 +
+    df["Generosity"] * 0.05 +
+    df["Corruption"] * 0.05
 )
 
-pdf = df.to_pandas()
+pdf = df.copy()
 
 # -----------------------------
-# SIDEBAR
+# SIDEBAR MENU
 # -----------------------------
 page = st.sidebar.selectbox(
     "Navigation",
@@ -99,17 +93,18 @@ if page == "Overview":
 
     st.header("Project Overview")
 
-    total_countries = len(pdf)
+    total_countries = pdf["Country"].nunique()
     avg_qol = round(pdf["QoL Score"].mean(), 2)
 
-    highest_country = pdf.sort_values("QoL Score", ascending=False).iloc[0]["Country"]
-    lowest_country = pdf.sort_values("QoL Score", ascending=True).iloc[0]["Country"]
+    top_country = pdf.sort_values("QoL Score", ascending=False).iloc[0]["Country"]
+    low_country = pdf.sort_values("QoL Score", ascending=True).iloc[0]["Country"]
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Countries", total_countries)
-    col2.metric("Average QoL", avg_qol)
-    col3.metric("Highest Country", highest_country)
-    col4.metric("Lowest Country", lowest_country)
+    c1, c2, c3, c4 = st.columns(4)
+
+    c1.metric("Countries", total_countries)
+    c2.metric("Average QoL", avg_qol)
+    c3.metric("Highest Country", top_country)
+    c4.metric("Lowest Country", low_country)
 
     st.subheader("Dataset Preview")
     st.dataframe(pdf)
@@ -121,23 +116,25 @@ elif page == "Country Comparison":
 
     st.header("Country Comparison")
 
-    countries = sorted(pdf["Country"].dropna().unique())
+    countries = sorted(pdf["Country"].unique())
 
     country1 = st.selectbox("Select Country 1", countries)
-    country2 = st.selectbox("Select Country 2", countries, index=1 if len(countries) > 1 else 0)
+    country2 = st.selectbox("Select Country 2", countries, index=1)
 
     compare_df = pdf[pdf["Country"].isin([country1, country2])]
+
     st.dataframe(compare_df)
 
-    comparison_columns = [
+    cols = [
         "GDP", "Health", "Freedom",
         "Social Support", "Generosity",
         "Corruption", "Happiness Score", "QoL Score"
     ]
 
-    radar_data = compare_df.set_index("Country")[comparison_columns]
-    st.subheader("Comparison Metrics")
-    st.dataframe(radar_data)
+    cols = [c for c in cols if c in pdf.columns]
+
+    st.subheader("Comparison Table")
+    st.dataframe(compare_df[["Country"] + cols])
 
 # -----------------------------
 # TOP RANKINGS
@@ -155,7 +152,7 @@ elif page == "Top Rankings":
         top10,
         x="Country",
         y="QoL Score",
-        title="Top 10 Countries by QoL Score"
+        title="Top 10 Countries by Quality of Life Score"
     )
 
     st.plotly_chart(fig, use_container_width=True)
@@ -168,25 +165,44 @@ elif page == "Analytics":
     st.header("Analytics Dashboard")
 
     st.subheader("GDP vs Happiness Score")
-    fig1 = px.scatter(pdf, x="GDP", y="Happiness Score", hover_name="Country")
-    st.plotly_chart(fig1, use_container_width=True)
+
+    if "GDP" in pdf.columns:
+        fig1 = px.scatter(
+            pdf,
+            x="GDP",
+            y="Happiness Score",
+            hover_name="Country"
+        )
+        st.plotly_chart(fig1, use_container_width=True)
 
     st.subheader("Freedom vs Happiness Score")
-    fig2 = px.scatter(pdf, x="Freedom", y="Happiness Score", hover_name="Country")
-    st.plotly_chart(fig2, use_container_width=True)
+
+    if "Freedom" in pdf.columns:
+        fig2 = px.scatter(
+            pdf,
+            x="Freedom",
+            y="Happiness Score",
+            hover_name="Country"
+        )
+        st.plotly_chart(fig2, use_container_width=True)
 
     st.subheader("Top 15 Countries")
 
     top15 = pdf.sort_values("QoL Score", ascending=False).head(15)
 
-    fig3 = px.bar(top15, x="Country", y="QoL Score")
+    fig3 = px.bar(
+        top15,
+        x="Country",
+        y="QoL Score"
+    )
+
     st.plotly_chart(fig3, use_container_width=True)
 
     st.subheader("Correlation Matrix")
 
-    numeric_df = pdf.select_dtypes(include="number")
+    numeric_df = pdf.select_dtypes(include=["number"])
 
-    if numeric_df.shape[1] > 1:
+    if not numeric_df.empty:
         corr = numeric_df.corr()
 
         fig4 = px.imshow(
@@ -198,4 +214,4 @@ elif page == "Analytics":
 
         st.plotly_chart(fig4, use_container_width=True)
     else:
-        st.warning("Not enough numeric columns for correlation matrix.")
+        st.warning("No numeric data available for correlation.")
